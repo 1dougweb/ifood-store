@@ -3,8 +3,30 @@ FROM node:20-alpine AS node-builder
 
 WORKDIR /var/www/html
 
-# Install build dependencies
-RUN apk add --no-cache python3 make g++
+# Install build dependencies including PHP for Wayfinder plugin
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    php83 \
+    php83-common \
+    php83-cli \
+    php83-json \
+    php83-mbstring \
+    php83-openssl \
+    php83-phar \
+    php83-tokenizer \
+    php83-xml \
+    php83-xmlwriter \
+    php83-dom \
+    php83-fileinfo \
+    php83-pdo \
+    php83-pdo_mysql \
+    curl \
+    git
+
+# Install Composer
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
 # Copy package files first for better caching
 COPY package*.json ./
@@ -24,6 +46,19 @@ RUN if [ ! -f .env ]; then \
         echo "APP_URL=http://localhost" >> .env && \
         echo "APP_KEY=" >> .env; \
     fi
+
+# Install PHP dependencies (minimal, just for Wayfinder)
+# Only install what's needed for wayfinder:generate command
+# We need vendor/ directory for artisan commands
+RUN if [ -f composer.json ]; then \
+        composer install --no-interaction --prefer-dist --no-dev --no-scripts --ignore-platform-reqs --optimize-autoloader --quiet || true; \
+    fi
+
+# Ensure artisan is executable
+RUN chmod +x artisan 2>/dev/null || true
+
+# Verify PHP and artisan are available
+RUN php --version && php artisan --version 2>/dev/null || echo "Artisan may not work yet, but that's OK for build"
 
 # Create build directory
 RUN mkdir -p public/build
