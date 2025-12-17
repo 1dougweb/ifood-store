@@ -3,17 +3,43 @@ FROM node:20-alpine AS node-builder
 
 WORKDIR /var/www/html
 
-# Copy package files
+# Install build dependencies
+RUN apk add --no-cache python3 make g++
+
+# Copy package files first for better caching
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production=false
+# Install dependencies (including dev dependencies for build)
+RUN npm ci --only=production=false || npm install
 
-# Copy application files
+# Copy all project files (except what's in .dockerignore)
+# This ensures Vite has access to all necessary files
 COPY . .
 
+# Create a minimal .env file for build if it doesn't exist
+# Vite/Laravel may need some env vars during build
+RUN if [ ! -f .env ]; then \
+        echo "APP_NAME=Laravel" > .env && \
+        echo "APP_ENV=production" >> .env && \
+        echo "APP_URL=http://localhost" >> .env && \
+        echo "APP_KEY=" >> .env; \
+    fi
+
+# Create build directory
+RUN mkdir -p public/build
+
 # Build assets
-RUN npm run build
+# Using set -e to fail on error and show output
+RUN set -e; \
+    echo "Starting build..."; \
+    npm run build || { \
+        echo "=== Build failed ==="; \
+        echo "Checking files..."; \
+        ls -la resources/js/ 2>/dev/null || echo "resources/js/ not found"; \
+        ls -la public/ 2>/dev/null || echo "public/ not found"; \
+        cat package.json 2>/dev/null || echo "package.json not found"; \
+        exit 1; \
+    }
 
 # PHP 8.3 Production Image
 FROM php:8.3-fpm-alpine
