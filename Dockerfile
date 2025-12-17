@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y \
     libpng-dev \
     libjpeg62-turbo-dev \
     libfreetype6-dev \
+    libwebp-dev \
+    libxpm-dev \
     locales \
     zip \
     jpegoptim optipng pngquant gifsicle \
