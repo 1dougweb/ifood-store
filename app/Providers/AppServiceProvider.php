@@ -19,6 +19,16 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Trust all proxies when behind a reverse proxy (like EasyPanel/Nginx)
+        // This allows Laravel to detect HTTPS correctly
+        if (app()->environment('production') || app()->environment('staging')) {
+            \Illuminate\Support\Facades\Request::setTrustedProxies(
+                ['*'],
+                \Illuminate\Http\Request::HEADER_X_FORWARDED_FOR |
+                \Illuminate\Http\Request::HEADER_X_FORWARDED_HOST |
+                \Illuminate\Http\Request::HEADER_X_FORWARDED_PORT |
+                \Illuminate\Http\Request::HEADER_X_FORWARDED_PROTO
+            );
+        }
     }
 }

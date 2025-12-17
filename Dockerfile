@@ -121,9 +121,16 @@ RUN echo 'server {' > /etc/nginx/sites-available/default && \
     echo '  root /var/www/html/public;' >> /etc/nginx/sites-available/default && \
     echo '  index index.php index.html;' >> /etc/nginx/sites-available/default && \
     echo '  charset utf-8;' >> /etc/nginx/sites-available/default && \
+    echo '' >> /etc/nginx/sites-available/default && \
+    echo '  # Trust proxy headers for HTTPS detection' >> /etc/nginx/sites-available/default && \
+    echo '  set_real_ip_from 0.0.0.0/0;' >> /etc/nginx/sites-available/default && \
+    echo '  real_ip_header X-Forwarded-For;' >> /etc/nginx/sites-available/default && \
+    echo '  real_ip_recursive on;' >> /etc/nginx/sites-available/default && \
+    echo '' >> /etc/nginx/sites-available/default && \
     echo '  location / {' >> /etc/nginx/sites-available/default && \
     echo '    try_files $uri $uri/ /index.php?$query_string;' >> /etc/nginx/sites-available/default && \
     echo '  }' >> /etc/nginx/sites-available/default && \
+    echo '' >> /etc/nginx/sites-available/default && \
     echo '  location ~ \.php$ {' >> /etc/nginx/sites-available/default && \
     echo '    try_files $uri =404;' >> /etc/nginx/sites-available/default && \
     echo '    fastcgi_split_path_info ^(.+\.php)(/.+)$;' >> /etc/nginx/sites-available/default && \
@@ -133,13 +140,23 @@ RUN echo 'server {' > /etc/nginx/sites-available/default && \
     echo '    include fastcgi_params;' >> /etc/nginx/sites-available/default && \
     echo '    fastcgi_hide_header X-Powered-By;' >> /etc/nginx/sites-available/default && \
     echo '    fastcgi_read_timeout 300;' >> /etc/nginx/sites-available/default && \
+    echo '    # Pass HTTPS headers to PHP for proper URL generation' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_param HTTP_X_FORWARDED_PROTO $http_x_forwarded_proto;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_param HTTP_X_FORWARDED_FOR $http_x_forwarded_for;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_param HTTP_X_FORWARDED_HOST $http_x_forwarded_host;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_param HTTP_X_FORWARDED_PORT $http_x_forwarded_port;' >> /etc/nginx/sites-available/default && \
+    echo '    # If X-Forwarded-Proto is https, set HTTPS=on' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_param HTTPS $http_x_forwarded_proto;' >> /etc/nginx/sites-available/default && \
     echo '  }' >> /etc/nginx/sites-available/default && \
+    echo '' >> /etc/nginx/sites-available/default && \
     echo '  location ~ /\.(?!well-known).* { deny all; }' >> /etc/nginx/sites-available/default && \
+    echo '' >> /etc/nginx/sites-available/default && \
     echo '  location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {' >> /etc/nginx/sites-available/default && \
     echo '    expires 1y;' >> /etc/nginx/sites-available/default && \
     echo '    add_header Cache-Control "public, immutable";' >> /etc/nginx/sites-available/default && \
     echo '    access_log off;' >> /etc/nginx/sites-available/default && \
     echo '  }' >> /etc/nginx/sites-available/default && \
+    echo '' >> /etc/nginx/sites-available/default && \
     echo '  location /health { access_log off; return 200 "healthy\n"; add_header Content-Type text/plain; }' >> /etc/nginx/sites-available/default && \
     echo '}' >> /etc/nginx/sites-available/default
 RUN rm -f /etc/nginx/sites-enabled/default && \
@@ -240,6 +257,11 @@ RUN echo '#!/bin/bash' > /usr/local/bin/docker-entrypoint.sh && \
     echo 'fi' >> /usr/local/bin/docker-entrypoint.sh && \
     echo '' >> /usr/local/bin/docker-entrypoint.sh && \
     echo 'cd /var/www/html' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '# Ensure APP_URL uses HTTPS if X-Forwarded-Proto is https' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'if [ -n "$APP_URL" ] && [[ "$APP_URL" == http://* ]]; then' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  echo "⚠ Warning: APP_URL is set to HTTP. Make sure it uses HTTPS in production."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'fi' >> /usr/local/bin/docker-entrypoint.sh && \
     echo '' >> /usr/local/bin/docker-entrypoint.sh && \
     echo '# Generate app key if needed' >> /usr/local/bin/docker-entrypoint.sh && \
     echo 'if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then' >> /usr/local/bin/docker-entrypoint.sh && \
