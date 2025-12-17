@@ -2,7 +2,8 @@
 import AppLayout from '@/layouts/AppLayout.vue';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { dashboard, orders } from '@/routes';
+import { dashboard } from '@/routes';
+import ordersRoute from '@/routes/orders';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link } from '@inertiajs/vue3';
 import { ArrowLeft, Package, User, MapPin, DollarSign, Clock } from 'lucide-vue-next';
@@ -51,7 +52,7 @@ const breadcrumbs: BreadcrumbItem[] = [
     },
     {
         title: 'Pedidos',
-        href: orders().url,
+        href: ordersRoute.index().url,
     },
     {
         title: `Pedido #${props.order.short_reference || props.order.ifood_order_id}`,

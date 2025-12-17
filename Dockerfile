@@ -29,17 +29,7 @@ RUN if [ ! -f .env ]; then \
 RUN mkdir -p public/build
 
 # Build assets
-# Using set -e to fail on error and show output
-RUN set -e; \
-    echo "Starting build..."; \
-    npm run build || { \
-        echo "=== Build failed ==="; \
-        echo "Checking files..."; \
-        ls -la resources/js/ 2>/dev/null || echo "resources/js/ not found"; \
-        ls -la public/ 2>/dev/null || echo "public/ not found"; \
-        cat package.json 2>/dev/null || echo "package.json not found"; \
-        exit 1; \
-    }
+RUN npm run build
 
 # PHP 8.3 Production Image
 FROM php:8.3-fpm-alpine
