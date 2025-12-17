@@ -1,0 +1,31 @@
+<?php
+
+return [
+    'welcome' => 'Welcome',
+    'dashboard' => 'Dashboard',
+    'orders' => 'Orders',
+    'restaurants' => 'Restaurants',
+    'notifications' => 'Notifications',
+    'integrations' => 'Integrations',
+    'settings' => 'Settings',
+    'profile' => 'Profile',
+    'logout' => 'Logout',
+    'save' => 'Save',
+    'cancel' => 'Cancel',
+    'edit' => 'Edit',
+    'delete' => 'Delete',
+    'create' => 'Create',
+    'view' => 'View',
+    'success' => 'Success',
+    'error' => 'Error',
+    'warning' => 'Warning',
+    'info' => 'Information',
+    'restaurant_created' => 'Restaurant created successfully!',
+    'restaurant_updated' => 'Restaurant updated successfully!',
+    'restaurant_deleted' => 'Restaurant deleted successfully!',
+    'ifood_connected' => 'iFood account connected successfully!',
+    'ifood_connection_error' => 'Error connecting iFood account.',
+    'notification_sent' => 'Notification sent successfully!',
+    'unauthorized' => 'You do not have permission to access this resource.',
+];
+

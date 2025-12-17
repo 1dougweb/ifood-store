@@ -1,0 +1,31 @@
+<?php
+
+return [
+    'welcome' => 'Bem-vindo',
+    'dashboard' => 'Dashboard',
+    'orders' => 'Pedidos',
+    'restaurants' => 'Restaurantes',
+    'notifications' => 'Notificações',
+    'integrations' => 'Integrações',
+    'settings' => 'Configurações',
+    'profile' => 'Perfil',
+    'logout' => 'Sair',
+    'save' => 'Salvar',
+    'cancel' => 'Cancelar',
+    'edit' => 'Editar',
+    'delete' => 'Excluir',
+    'create' => 'Criar',
+    'view' => 'Visualizar',
+    'success' => 'Sucesso',
+    'error' => 'Erro',
+    'warning' => 'Aviso',
+    'info' => 'Informação',
+    'restaurant_created' => 'Restaurante criado com sucesso!',
+    'restaurant_updated' => 'Restaurante atualizado com sucesso!',
+    'restaurant_deleted' => 'Restaurante excluído com sucesso!',
+    'ifood_connected' => 'Conta iFood conectada com sucesso!',
+    'ifood_connection_error' => 'Erro ao conectar conta iFood.',
+    'notification_sent' => 'Notificação enviada com sucesso!',
+    'unauthorized' => 'Você não tem permissão para acessar este recurso.',
+];
+
