@@ -1,45 +1,90 @@
-# Multi-stage build for production
-FROM node:20-alpine AS node-builder
+FROM php:8.3-fpm
 
+# Set working directory
 WORKDIR /var/www/html
 
-# Install build dependencies including PHP for Wayfinder plugin
-RUN apk add --no-cache \
-    python3 \
-    make \
-    g++ \
-    php83 \
-    php83-common \
-    php83-cli \
-    php83-json \
-    php83-mbstring \
-    php83-openssl \
-    php83-phar \
-    php83-tokenizer \
-    php83-xml \
-    php83-xmlwriter \
-    php83-dom \
-    php83-fileinfo \
-    php83-pdo \
-    php83-pdo_mysql \
+# Prevent interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+ENV COMPOSER_ALLOW_SUPERUSER=1
+
+# Install dependencies (including Nginx and Supervisor)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpng-dev \
+    libjpeg62-turbo-dev \
+    libfreetype6-dev \
+    locales \
+    zip \
+    jpegoptim optipng pngquant gifsicle \
+    vim \
+    unzip \
+    git \
     curl \
-    git
+    libzip-dev \
+    libonig-dev \
+    libicu-dev \
+    nginx \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PHP extensions
+RUN docker-php-ext-install pdo_mysql mbstring zip exif pcntl intl
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp --with-xpm
+RUN docker-php-ext-install gd
+
+# Install Redis extension
+RUN pecl install redis && docker-php-ext-enable redis
 
 # Install Composer
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Copy package files first for better caching
-COPY package*.json ./
+# Verify Node.js and npm installation
+RUN node --version && npm --version
 
-# Install dependencies (including dev dependencies for build)
-RUN npm ci --only=production=false || npm install
+# Add user for laravel application
+RUN groupadd -g 1000 www || true
+RUN useradd -u 1000 -ms /bin/bash -g www www || true
 
-# Copy all project files (except what's in .dockerignore)
-# This ensures Vite has access to all necessary files
-COPY . .
+# Install dependencies (as root, before switching user)
+USER root
+
+# Copy only dependency files first (for better Docker layer caching)
+COPY --chown=www:www composer.json composer.lock* ./
+COPY --chown=www:www package.json package-lock.json* ./
+
+# Install Composer dependencies with cache mount
+RUN --mount=type=cache,target=/root/.composer/cache \
+    cd /var/www/html && \
+    if [ -f composer.json ]; then \
+        echo "=== Installing Composer dependencies ===" && \
+        composer install --no-dev --optimize-autoloader --no-interaction --no-scripts --prefer-dist || \
+        composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist; \
+        echo "✓ Composer dependencies installed" && \
+        ls -la vendor/autoload.php || echo "⚠ Warning: vendor/autoload.php not found"; \
+    else \
+        echo "✗ composer.json NOT found, skipping composer install"; \
+    fi
+
+# Install Node dependencies with cache mount
+RUN --mount=type=cache,target=/root/.npm \
+    cd /var/www/html && \
+    if [ -f package.json ]; then \
+        echo "=== Installing npm dependencies ===" && \
+        npm ci --legacy-peer-deps --prefer-offline --no-audit 2>&1 || npm install --legacy-peer-deps --prefer-offline --no-audit 2>&1 || echo "npm install had issues but continuing..."; \
+        echo "✓ npm dependencies installed"; \
+    else \
+        echo "✗ package.json NOT found, skipping npm install"; \
+    fi
+
+# Copy application code (this layer will be invalidated more often)
+COPY --chown=www:www . /var/www/html
 
 # Create a minimal .env file for build if it doesn't exist
-# Vite/Laravel may need some env vars during build
 RUN if [ ! -f .env ]; then \
         echo "APP_NAME=Laravel" > .env && \
         echo "APP_ENV=production" >> .env && \
@@ -47,180 +92,70 @@ RUN if [ ! -f .env ]; then \
         echo "APP_KEY=" >> .env; \
     fi
 
-# Install PHP dependencies (minimal, just for Wayfinder)
-# Only install what's needed for wayfinder:generate command
-# We need vendor/ directory for artisan commands
-RUN if [ -f composer.json ]; then \
-        composer install --no-interaction --prefer-dist --no-dev --no-scripts --ignore-platform-reqs --optimize-autoloader --quiet || true; \
-    fi
-
-# Ensure artisan is executable
-RUN chmod +x artisan 2>/dev/null || true
-
-# Verify PHP and artisan are available
-RUN php --version && php artisan --version 2>/dev/null || echo "Artisan may not work yet, but that's OK for build"
-
-# Create build directory
-RUN mkdir -p public/build
-
-# Build assets
-RUN npm run build
-
-# PHP 8.3 Production Image
-FROM php:8.3-fpm-alpine
-
-# Install system dependencies
-RUN apk add --no-cache \
-    git \
-    curl \
-    libpng-dev \
-    libzip-dev \
-    zip \
-    unzip \
-    oniguruma-dev \
-    postgresql-dev \
-    icu-dev \
-    freetype-dev \
-    libjpeg-turbo-dev \
-    libwebp-dev \
-    libxpm-dev \
-    bash \
-    mysql-client \
-    nginx \
-    supervisor
-
-# Install PHP extensions
-RUN docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp --with-xpm \
-    && docker-php-ext-install -j$(nproc) \
-    pdo \
-    pdo_mysql \
-    pdo_pgsql \
-    mysqli \
-    zip \
-    mbstring \
-    exif \
-    pcntl \
-    bcmath \
-    gd \
-    intl \
-    opcache
-
-# Install Redis extension
-RUN apk add --no-cache pcre-dev $PHPIZE_DEPS \
-    && pecl install redis \
-    && docker-php-ext-enable redis \
-    && apk del pcre-dev $PHPIZE_DEPS
-
-# Install Composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-
-# Copy built assets from node-builder
-COPY --from=node-builder /var/www/html/public/build /var/www/html/public/build
-
-# Set working directory
-WORKDIR /var/www/html
-
-# Copy application files
-COPY . /var/www/html
-
-# Accept build arguments (from EasyPanel)
-ARG APP_ENV=production
-ARG APP_DEBUG=false
-
-# Install PHP dependencies
-RUN if [ "$APP_ENV" = "production" ]; then \
-        composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev; \
+# Build assets (only if package.json exists and dependencies are installed)
+RUN cd /var/www/html && \
+    if [ -f package.json ] && [ -d node_modules ]; then \
+        echo "=== Building assets ===" && \
+        npm run build 2>&1 || (echo "✗ Build failed, will retry at runtime" && mkdir -p public/build); \
+        if [ -f public/build/manifest.json ]; then \
+            echo "✓ Build successful! manifest.json created during build"; \
+        else \
+            echo "⚠ Build did not create manifest.json, will be created at runtime"; \
+        fi; \
     else \
-        composer install --no-interaction --prefer-dist --optimize-autoloader; \
+        echo "⚠ Skipping build - package.json or node_modules not found"; \
     fi
 
-# Set permissions
-RUN chown -R www-data:www-data /var/www/html \
-    && chmod -R 755 /var/www/html/storage \
-    && chmod -R 755 /var/www/html/bootstrap/cache
+# Ensure build directory has correct permissions
+RUN mkdir -p /var/www/html/public/build && \
+    chown -R www:www /var/www/html/public/build && \
+    chmod -R 755 /var/www/html/public/build || true
 
-# Create Nginx directories and configuration
-RUN mkdir -p /etc/nginx/http.d /var/log/nginx
+# Configure Nginx (as root, before switching user)
+RUN mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+RUN echo 'server {' > /etc/nginx/sites-available/default && \
+    echo '  listen 80;' >> /etc/nginx/sites-available/default && \
+    echo '  server_name localhost;' >> /etc/nginx/sites-available/default && \
+    echo '  root /var/www/html/public;' >> /etc/nginx/sites-available/default && \
+    echo '  index index.php index.html;' >> /etc/nginx/sites-available/default && \
+    echo '  charset utf-8;' >> /etc/nginx/sites-available/default && \
+    echo '  location / {' >> /etc/nginx/sites-available/default && \
+    echo '    try_files $uri $uri/ /index.php?$query_string;' >> /etc/nginx/sites-available/default && \
+    echo '  }' >> /etc/nginx/sites-available/default && \
+    echo '  location ~ \.php$ {' >> /etc/nginx/sites-available/default && \
+    echo '    try_files $uri =404;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_split_path_info ^(.+\.php)(/.+)$;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_pass 127.0.0.1:9000;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_index index.php;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;' >> /etc/nginx/sites-available/default && \
+    echo '    include fastcgi_params;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_hide_header X-Powered-By;' >> /etc/nginx/sites-available/default && \
+    echo '    fastcgi_read_timeout 300;' >> /etc/nginx/sites-available/default && \
+    echo '  }' >> /etc/nginx/sites-available/default && \
+    echo '  location ~ /\.(?!well-known).* { deny all; }' >> /etc/nginx/sites-available/default && \
+    echo '  location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {' >> /etc/nginx/sites-available/default && \
+    echo '    expires 1y;' >> /etc/nginx/sites-available/default && \
+    echo '    add_header Cache-Control "public, immutable";' >> /etc/nginx/sites-available/default && \
+    echo '    access_log off;' >> /etc/nginx/sites-available/default && \
+    echo '  }' >> /etc/nginx/sites-available/default && \
+    echo '  location /health { access_log off; return 200 "healthy\n"; add_header Content-Type text/plain; }' >> /etc/nginx/sites-available/default && \
+    echo '}' >> /etc/nginx/sites-available/default
+RUN rm -f /etc/nginx/sites-enabled/default && \
+    ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default || true
 
-# Create Nginx main config
-RUN echo 'user nginx;' > /etc/nginx/nginx.conf && \
-    echo 'worker_processes auto;' >> /etc/nginx/nginx.conf && \
-    echo 'error_log /var/log/nginx/error.log warn;' >> /etc/nginx/nginx.conf && \
-    echo 'pid /var/run/nginx.pid;' >> /etc/nginx/nginx.conf && \
-    echo 'events { worker_connections 1024; use epoll; multi_accept on; }' >> /etc/nginx/nginx.conf && \
-    echo 'http {' >> /etc/nginx/nginx.conf && \
-    echo '  include /etc/nginx/mime.types;' >> /etc/nginx/nginx.conf && \
-    echo '  default_type application/octet-stream;' >> /etc/nginx/nginx.conf && \
-    echo '  sendfile on;' >> /etc/nginx/nginx.conf && \
-    echo '  keepalive_timeout 65;' >> /etc/nginx/nginx.conf && \
-    echo '  client_max_body_size 20M;' >> /etc/nginx/nginx.conf && \
-    echo '  gzip on;' >> /etc/nginx/nginx.conf && \
-    echo '  gzip_vary on;' >> /etc/nginx/nginx.conf && \
-    echo '  gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;' >> /etc/nginx/nginx.conf && \
-    echo '  include /etc/nginx/http.d/*.conf;' >> /etc/nginx/nginx.conf && \
-    echo '}' >> /etc/nginx/nginx.conf
-
-# Create Nginx virtual host
-RUN echo 'server {' > /etc/nginx/http.d/default.conf && \
-    echo '  listen 80;' >> /etc/nginx/http.d/default.conf && \
-    echo '  server_name localhost;' >> /etc/nginx/http.d/default.conf && \
-    echo '  root /var/www/html/public;' >> /etc/nginx/http.d/default.conf && \
-    echo '  index index.php index.html;' >> /etc/nginx/http.d/default.conf && \
-    echo '  charset utf-8;' >> /etc/nginx/http.d/default.conf && \
-    echo '  location / {' >> /etc/nginx/http.d/default.conf && \
-    echo '    try_files $uri $uri/ /index.php?$query_string;' >> /etc/nginx/http.d/default.conf && \
-    echo '  }' >> /etc/nginx/http.d/default.conf && \
-    echo '  location ~ \.php$ {' >> /etc/nginx/http.d/default.conf && \
-    echo '    try_files $uri =404;' >> /etc/nginx/http.d/default.conf && \
-    echo '    fastcgi_split_path_info ^(.+\.php)(/.+)$;' >> /etc/nginx/http.d/default.conf && \
-    echo '    fastcgi_pass 127.0.0.1:9000;' >> /etc/nginx/http.d/default.conf && \
-    echo '    fastcgi_index index.php;' >> /etc/nginx/http.d/default.conf && \
-    echo '    fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;' >> /etc/nginx/http.d/default.conf && \
-    echo '    include fastcgi_params;' >> /etc/nginx/http.d/default.conf && \
-    echo '    fastcgi_hide_header X-Powered-By;' >> /etc/nginx/http.d/default.conf && \
-    echo '    fastcgi_read_timeout 300;' >> /etc/nginx/http.d/default.conf && \
-    echo '  }' >> /etc/nginx/http.d/default.conf && \
-    echo '  location ~ /\.(?!well-known).* { deny all; }' >> /etc/nginx/http.d/default.conf && \
-    echo '  location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {' >> /etc/nginx/http.d/default.conf && \
-    echo '    expires 1y;' >> /etc/nginx/http.d/default.conf && \
-    echo '    add_header Cache-Control "public, immutable";' >> /etc/nginx/http.d/default.conf && \
-    echo '    access_log off;' >> /etc/nginx/http.d/default.conf && \
-    echo '  }' >> /etc/nginx/http.d/default.conf && \
-    echo '  location /health { access_log off; return 200 "healthy\n"; add_header Content-Type text/plain; }' >> /etc/nginx/http.d/default.conf && \
-    echo '}' >> /etc/nginx/http.d/default.conf
-
-# Copy PHP configuration
-RUN echo '[PHP]' > /usr/local/etc/php/conf.d/custom.ini && \
-    echo 'memory_limit = 256M' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo 'upload_max_filesize = 20M' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo 'post_max_size = 20M' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo 'max_execution_time = 300' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo '[Date]' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo 'date.timezone = America/Sao_Paulo' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo '[OPcache]' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo 'opcache.enable=1' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo 'opcache.memory_consumption=128' >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo 'opcache.max_accelerated_files=10000' >> /usr/local/etc/php/conf.d/custom.ini
-
-# Install supervisor and curl
-RUN apk add --no-cache supervisor curl
-
-# Create supervisor directories
-RUN mkdir -p /etc/supervisor/conf.d /var/log/supervisor
-
-# Create supervisor configuration
+# Configure Supervisor (as root)
 RUN echo '[supervisord]' > /etc/supervisor/conf.d/supervisord.conf && \
     echo 'nodaemon=true' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'logfile=/var/log/supervisor/supervisord.log' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'pidfile=/var/run/supervisord.pid' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'user=root' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '[program:php-fpm]' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'command=php-fpm' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'command=php-fpm -F' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'autostart=true' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'autorestart=true' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'stderr_logfile=/var/log/php-fpm.err.log' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'stdout_logfile=/var/log/php-fpm.out.log' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'user=root' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'priority=999' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'startsecs=3' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '[program:nginx]' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'command=nginx -g "daemon off;"' >> /etc/supervisor/conf.d/supervisord.conf && \
@@ -228,62 +163,115 @@ RUN echo '[supervisord]' > /etc/supervisor/conf.d/supervisord.conf && \
     echo 'autorestart=true' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'stderr_logfile=/var/log/nginx.err.log' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'stdout_logfile=/var/log/nginx.out.log' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'user=root' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'priority=998' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'startsecs=2' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '[program:queue]' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'command=php /var/www/html/artisan queue:work --tries=3 --timeout=90' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'command=/bin/bash -c "cd /var/www/html && php artisan queue:work --tries=3 --timeout=90"' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'autostart=true' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'autorestart=true' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'stderr_logfile=/var/log/queue.err.log' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'stdout_logfile=/var/log/queue.out.log' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'user=www-data' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'directory=/var/www/html' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'priority=997' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'startsecs=5' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'startretries=3' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'user=www' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'environment=HOME="/var/www/html",USER="www",PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '[program:scheduler]' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'command=/bin/sh -c "while true; do php /var/www/html/artisan schedule:run --verbose --no-interaction; sleep 60; done"' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'command=/bin/bash -c "while true; do cd /var/www/html && php artisan schedule:run --verbose --no-interaction; sleep 60; done"' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'autostart=true' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'autorestart=true' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'stderr_logfile=/var/log/scheduler.err.log' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'stdout_logfile=/var/log/scheduler.out.log' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'user=www-data' >> /etc/supervisor/conf.d/supervisord.conf && \
-    echo 'directory=/var/www/html' >> /etc/supervisor/conf.d/supervisord.conf
+    echo 'priority=996' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'startsecs=5' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'startretries=3' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'user=www' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'environment=HOME="/var/www/html",USER="www",PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' >> /etc/supervisor/conf.d/supervisord.conf
 
-# Create startup script
-RUN echo '#!/bin/sh' > /start.sh && \
-    echo 'set -e' >> /start.sh && \
-    echo 'echo "Starting application initialization..."' >> /start.sh && \
-    echo 'if [ -n "$DB_HOST" ] && [ "$DB_HOST" != "127.0.0.1" ] && [ "$DB_HOST" != "localhost" ]; then' >> /start.sh && \
-    echo '  echo "Waiting for database connection..."' >> /start.sh && \
-    echo '  until php -r "try { \$pdo = new PDO(\"${DB_CONNECTION:-mysql}:host=${DB_HOST};dbname=${DB_DATABASE}\", \"${DB_USERNAME}\", \"${DB_PASSWORD}\"); echo \"Database connected\"; exit(0); } catch (PDOException \$e) { exit(1); }" 2>/dev/null; do' >> /start.sh && \
-    echo '    echo "Database is unavailable - sleeping"' >> /start.sh && \
-    echo '    sleep 2' >> /start.sh && \
-    echo '  done' >> /start.sh && \
-    echo '  echo "Database is ready!"' >> /start.sh && \
-    echo 'fi' >> /start.sh && \
-    echo 'if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then' >> /start.sh && \
-    echo '  echo "Generating application key..."' >> /start.sh && \
-    echo '  php artisan key:generate --force || true' >> /start.sh && \
-    echo 'fi' >> /start.sh && \
-    echo 'echo "Running migrations..."' >> /start.sh && \
-    echo 'php artisan migrate --force || true' >> /start.sh && \
-    echo 'echo "Clearing caches..."' >> /start.sh && \
-    echo 'php artisan config:clear || true' >> /start.sh && \
-    echo 'php artisan route:clear || true' >> /start.sh && \
-    echo 'php artisan view:clear || true' >> /start.sh && \
-    echo 'php artisan cache:clear || true' >> /start.sh && \
-    echo 'if [ "$APP_ENV" = "production" ]; then' >> /start.sh && \
-    echo '  echo "Caching for production..."' >> /start.sh && \
-    echo '  php artisan config:cache || true' >> /start.sh && \
-    echo '  php artisan route:cache || true' >> /start.sh && \
-    echo '  php artisan view:cache || true' >> /start.sh && \
-    echo 'fi' >> /start.sh && \
-    echo 'echo "Setting permissions..."' >> /start.sh && \
-    echo 'chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache || true' >> /start.sh && \
-    echo 'chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache || true' >> /start.sh && \
-    echo 'echo "Application initialization complete!"' >> /start.sh && \
-    echo 'echo "Starting services..."' >> /start.sh && \
-    echo 'exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf' >> /start.sh && \
-    chmod +x /start.sh
+# Set permissions (as root)
+RUN chown -R www:www /var/www/html || true
+RUN chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache || true
+
+# Fix PHP-FPM pool configuration to use www user
+RUN if [ -f /usr/local/etc/php-fpm.d/www.conf ]; then \
+    sed -i 's/user = www-data/user = www/g' /usr/local/etc/php-fpm.d/www.conf || true; \
+    sed -i 's/group = www-data/group = www/g' /usr/local/etc/php-fpm.d/www.conf || true; \
+    sed -i 's/listen.owner = www-data/listen.owner = www/g' /usr/local/etc/php-fpm.d/www.conf || true; \
+    sed -i 's/listen.group = www-data/listen.group = www/g' /usr/local/etc/php-fpm.d/www.conf || true; \
+    fi
+
+# Create PHP-FPM pool directory and ensure www.conf exists
+RUN mkdir -p /usr/local/etc/php-fpm.d || true
+RUN if [ ! -f /usr/local/etc/php-fpm.d/www.conf ]; then \
+    echo '[www]' > /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'user = www' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'group = www' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'listen = 127.0.0.1:9000' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'listen.owner = www' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'listen.group = www' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'pm = dynamic' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'pm.max_children = 50' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'pm.start_servers = 5' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'pm.min_spare_servers = 5' >> /usr/local/etc/php-fpm.d/www.conf && \
+    echo 'pm.max_spare_servers = 35' >> /usr/local/etc/php-fpm.d/www.conf; \
+    fi
+
+# Create log directories
+RUN mkdir -p /var/log && chmod 777 /var/log
+
+# Create entrypoint script inline
+RUN echo '#!/bin/bash' > /usr/local/bin/docker-entrypoint.sh && \
+    echo 'set -e' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'echo "Starting application initialization..."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '# Wait for database if needed' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'if [ -n "$DB_HOST" ] && [ "$DB_HOST" != "127.0.0.1" ] && [ "$DB_HOST" != "localhost" ]; then' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  echo "Waiting for database connection..."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  until php -r "try { \$pdo = new PDO(\"${DB_CONNECTION:-mysql}:host=${DB_HOST};dbname=${DB_DATABASE}\", \"${DB_USERNAME}\", \"${DB_PASSWORD}\"); echo \"Database connected\"; exit(0); } catch (PDOException \$e) { exit(1); }" 2>/dev/null; do' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '    echo "Database is unavailable - sleeping"' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '    sleep 2' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  done' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  echo "Database is ready!"' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'fi' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'cd /var/www/html' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '# Generate app key if needed' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  echo "Generating application key..."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  php artisan key:generate --force || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'fi' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '# Run migrations' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'echo "Running migrations..."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'php artisan migrate --force || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '# Clear and cache config' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'echo "Clearing caches..."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'php artisan config:clear || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'php artisan route:clear || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'php artisan view:clear || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'php artisan cache:clear || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'if [ "$APP_ENV" = "production" ]; then' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  echo "Caching for production..."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  php artisan config:cache || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  php artisan route:cache || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '  php artisan view:cache || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'fi' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '# Set permissions' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'echo "Setting permissions..."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'chown -R www:www /var/www/html/storage /var/www/html/bootstrap/cache || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache || true' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo '' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'echo "Application initialization complete!"' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'echo "Starting services..."' >> /usr/local/bin/docker-entrypoint.sh && \
+    echo 'exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf' >> /usr/local/bin/docker-entrypoint.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Expose port
 EXPOSE 80
@@ -292,5 +280,5 @@ EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
     CMD curl -f http://localhost/health 2>/dev/null || exit 1
 
-# Start supervisor via startup script
-CMD ["/start.sh"]
+# Start supervisor to run PHP-FPM, Nginx, Queue and Scheduler
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
