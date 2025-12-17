@@ -14,17 +14,17 @@ services:
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/custom.ini
     networks:
       - ead_network
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file:
-      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - APP_ENV=${APP_ENV:-local}
+      - APP_DEBUG=${APP_DEBUG:-true}
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - DB_DATABASE=${DB_DATABASE:-ead}
+      - DB_USERNAME=${DB_USERNAME:-root}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - REDIS_HOST=${REDIS_HOST:-host.docker.internal}
+      - REDIS_PORT=${REDIS_PORT:-6379}
     command: php-fpm
 
   # Nginx Web Server
@@ -59,48 +59,7 @@ services:
       - node_modules:/var/www/html/node_modules
     networks:
       - ead_network
-    command: npm run build
-
-  # MariaDB Database
-  db:
-    image: mariadb:11.3
-    container_name: ead_db
-    restart: unless-stopped
-    ports:
-      - "${DB_PORT:-3306}:3306"
-    environment:
-      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-root_password}
-      - MYSQL_DATABASE=${DB_DATABASE:-ead}
-      - MYSQL_USER=${DB_USERNAME:-ead_user}
-      - MYSQL_PASSWORD=${DB_PASSWORD:-ead_password}
-    volumes:
-      - db_data:/var/lib/mysql
-      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/custom.cnf
-    networks:
-      - ead_network
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis Cache
-  redis:
-    image: redis:7-alpine
-    container_name: ead_redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - ead_network
-    command: redis-server --appendonly yes
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+    command: npm run dev
 
   # Queue Worker
   queue:
@@ -114,16 +73,13 @@ services:
       - ./:/var/www/html
     networks:
       - ead_network
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - REDIS_HOST=${REDIS_HOST:-host.docker.internal}
       - REDIS_PORT=6379
     command: php artisan queue:work --tries=3 --timeout=90
 
@@ -139,16 +95,13 @@ services:
       - ./:/var/www/html
     networks:
       - ead_network
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - REDIS_HOST=${REDIS_HOST:-host.docker.internal}
       - REDIS_PORT=6379
     command: >
       sh -c "while true; do
@@ -161,9 +114,5 @@ networks:
     driver: bridge
 
 volumes:
-  db_data:
-    driver: local
-  redis_data:
-    driver: local
   node_modules:
     driver: local
