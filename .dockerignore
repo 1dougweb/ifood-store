@@ -4,6 +4,7 @@
 .env
 .env.backup
 .env.production
+.env.local
 .phpunit.result.cache
 node_modules
 npm-debug.log
@@ -24,10 +25,15 @@ Thumbs.db
 *~
 docker-compose.yml
 docker-compose.override.yml
-Dockerfile
+Dockerfile.dev
 .dockerignore
 README.md
 *.md
 tests
 .phpunit.cache
 coverage
+docker/
+.docker/
+*.log
+*.sqlite
+*.sqlite-journal
