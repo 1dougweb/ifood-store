@@ -62,7 +62,7 @@ const form = useForm({
     whatsapp_number: props.restaurant.whatsapp_number || '',
     ifood_client_id: props.restaurant.ifood_client_id || '',
     ifood_client_secret: props.restaurant.ifood_client_secret || '',
-    is_active: props.restaurant.is_active,
+    is_active: Boolean(props.restaurant.is_active ?? false),
     notification_settings: props.restaurant.notification_settings || {
         enabled_events: [
             'new_order',
@@ -135,7 +135,11 @@ watch(() => form.whatsapp_number, (value) => {
 });
 
 const submit = () => {
-    form.put(restaurantsRoute.update({ restaurant: props.restaurant.id }).url);
+    // Garantir que is_active sempre seja enviado como boolean
+    form.transform((data) => ({
+        ...data,
+        is_active: Boolean(data.is_active ?? false),
+    })).put(restaurantsRoute.update({ restaurant: props.restaurant.id }).url);
 };
 
 const copyUserCode = async () => {
@@ -178,6 +182,14 @@ const webhookUrl = computed(() => {
 });
 
 const copied = ref(false);
+
+// Computed para garantir que is_active seja sempre boolean e reativo
+const isActiveChecked = computed({
+    get: () => Boolean(form.is_active),
+    set: (value: boolean) => {
+        form.is_active = Boolean(value);
+    },
+});
 
 const copyWebhookUrl = async () => {
     if (typeof navigator !== 'undefined' && webhookUrl.value) {
@@ -503,11 +515,13 @@ const copyWebhookUrl = async () => {
                         <div class="flex items-center space-x-2">
                             <Checkbox
                                 id="is_active"
-                                v-model:checked="form.is_active"
+                                :checked="isActiveChecked"
+                                @update:checked="(checked) => { isActiveChecked = Boolean(checked) }"
                             />
                             <Label
                                 for="is_active"
-                                class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                                @click="isActiveChecked = !isActiveChecked"
                             >
                                 Restaurante ativo
                             </Label>

@@ -121,21 +121,21 @@ class RestaurantController extends Controller
             );
         }
 
-        // Gerar URL do webhook
-        $baseUrl = config('app.url');
+        // Gerar URL do webhook dinamicamente usando APP_URL
+        $baseUrl = env('APP_URL');
+        
+        // Se APP_URL não estiver definido ou for localhost, usar a URL da requisição atual
         if (empty($baseUrl) || $baseUrl === 'http://localhost' || $baseUrl === 'http://127.0.0.1:8000') {
             // Usar URL da requisição atual como fallback
             $baseUrl = $request->getSchemeAndHttpHost();
         }
         
-        $webhookUrl = rtrim($baseUrl, '/') . '/api/webhooks/ifood';
+        // Garantir que use HTTPS se a requisição for HTTPS ou se APP_URL já for HTTPS
+        if ($request->secure() || $request->header('X-Forwarded-Proto') === 'https' || str_starts_with($baseUrl, 'https://')) {
+            $baseUrl = str_replace('http://', 'https://', $baseUrl);
+        }
         
-        // Log para debug (remover em produção)
-        \Log::debug('Webhook URL generated', [
-            'baseUrl' => $baseUrl,
-            'webhookUrl' => $webhookUrl,
-            'config_app_url' => config('app.url'),
-        ]);
+        $webhookUrl = rtrim($baseUrl, '/') . '/api/webhooks/ifood';
         
         return Inertia::render('Restaurants/Edit', [
             'restaurant' => $restaurant,
@@ -176,8 +176,12 @@ class RestaurantController extends Controller
             'notification_settings.quiet_hours.enabled' => 'nullable|boolean',
             'notification_settings.quiet_hours.start' => 'nullable|string',
             'notification_settings.quiet_hours.end' => 'nullable|string',
-            'is_active' => 'boolean',
+            'is_active' => 'sometimes|boolean',
         ]);
+
+        // Garantir que is_active seja sempre boolean
+        // O frontend sempre envia o campo, então sempre processar
+        $validated['is_active'] = filter_var($request->input('is_active', false), FILTER_VALIDATE_BOOLEAN);
 
         $restaurant->update($validated);
 
